@@ -1,29 +1,24 @@
 import cv2
-import supervision
+from supervision import Detections
 from ultralytics import YOLO
+import supervision
+from services.annotator_service import AnnotatorService
+from services.videostream_capture_service import VideostreamCaptureService
+from services.visualize_service import VisualizeService
 
 
 class DetectorService:
     """
-    A service for object detection using YOLO models. This class supports detection
-    in real-time webcam feeds, video files, and static images.
+    Service for performing object detection using YOLO models on different input sources.
+
+    This service provides methods for real-time detection from webcam,
+    video files, and static images using YOLO models.
 
     Attributes:
-        model (str): Name of the YOLO model to be used for detection.
-
-    Methods:
-        __init__(model_name):
-            Initializes the DetectorService with the specified model.
-
-        read_webcam() -> None:
-            Starts real-time object detection using a webcam feed.
-
-        read_video(video_path: str) -> None:
-            Runs object detection on a video file specified by the path.
-
-        read_image(image_path: str) -> None:
-            Runs object detection on a static image specified by the path.
+       CONFIDENCE_THRESHOLD (float): Minimum confidence threshold for detections (70%)
+       model: YOLO model instance for object detection
     """
+    CONFIDENCE_THRESHOLD = 70
 
     def __init__(self, model_path):
         """
@@ -36,35 +31,37 @@ class DetectorService:
 
     def read_webcam(self, resolution: list = (1280, 720)) -> None:
         """
-        Starts real-time object detection using a webcam feed.
+        Process webcam feed for real-time object detection and visualization.
+
+        This method captures video from webcam, applies object detection model,
+        filters detections by confidence, and displays the annotated results.
 
         Args:
-           resolution (list): List or tuple specifying the resolution of the webcam feed as (width, height).
-                              Default is (1280, 720).
+           resolution: List of [width, height] for capture resolution,
+                      defaults to [1280, 720]
 
-        This method initializes the webcam with the specified resolution, processes each frame
-        using the YOLO model, and displays the detection results in a window. Press 'Esc' to terminate the detection.
+        Note:
+           - Press ESC (key code 27) to stop the video stream
+           - Each frame goes through following pipeline:
+             1. Capture from webcam
+             2. Apply detection model
+             3. Filter detections
+             4. Annotate frame
+             5. Display results
 
-        Raises:
-           SystemExit: If there are errors with webcam access.
         """
-        frame_width, frame_height = resolution
-
-        captured_source = cv2.VideoCapture(0)
-        captured_source.set(cv2.CAP_PROP_FRAME_WIDTH, frame_width)
-        captured_source.set(cv2.CAP_PROP_FRAME_HEIGHT, frame_height)
-
-        box_annotator = supervision.BoxCornerAnnotator()
-        label_annotator = supervision.LabelAnnotator(text_color=supervision.Color.RED)
-
+        annotator_service = AnnotatorService()
+        videostream_capture_service = VideostreamCaptureService(resolution=resolution)
+        visualize_service = VisualizeService()
         while True:
-            _, captured_frame = captured_source.read()
+            captured_frame = videostream_capture_service.read_video_stream()
             model_frame = self.model(captured_frame)[0]
-            found_detections = supervision.Detections.from_ultralytics(model_frame)
+            detections = supervision.Detections.from_ultralytics(model_frame)
 
-            captured_frame = box_annotator.annotate(scene=captured_frame, detections=found_detections)
-            captured_frame = label_annotator.annotate(scene=captured_frame, detections=found_detections)
-            cv2.imshow("MIL_OBJECT_DETECTOR", captured_frame)
+            filtered_detections = self._filter_by_confidence(detections)
+            annotated_frame = annotator_service.annotate(frame=captured_frame, detections=filtered_detections)
+
+            visualize_service.visualize(frame=annotated_frame)
 
             if cv2.waitKey(30) == 27:
                 break
@@ -94,3 +91,17 @@ class DetectorService:
            FileNotFoundError: If the image file is not found at the specified path.
         """
         self.model(source=image_path, show=show)
+
+    def _filter_by_confidence(self, detections: Detections) -> Detections:
+        """
+        Filter detections based on confidence threshold.
+
+        Args:
+            detections: Detections object from YOLO model
+
+        Returns:
+            Detections: Filtered detections where confidence > threshold
+
+        """
+        filtered_detections = detections[detections.confidence > self.CONFIDENCE_THRESHOLD]
+        return filtered_detections
